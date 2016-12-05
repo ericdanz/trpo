@@ -65,7 +65,7 @@ class TRPOAgent(object):
 
         self.losses = [surr, kl, ent]
         self.proximal_loss = surr + self.beta * kl
-        self.learning_rate_value = 1e-2
+        self.learning_rate_value = 1e-1
         self.train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.proximal_loss)
         self.vf = VF(self.session)
         self.kl_running_avg = 0
