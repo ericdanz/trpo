@@ -20,22 +20,21 @@ def policy_model(input_layer,output_size):
         W = tf.Variable(tf.zeros([input_layer.get_shape()[1].value,hidden_layer_sizes[0]]))
         b = tf.Variable(tf.zeros([hidden_layer_sizes[0]]))
         h1 = tf.matmul(input_layer,W)
-        h1 = tf.bias_add(h1,b)
+        h1 = tf.nn.bias_add(h1,b)
     with tf.variable_scope('h2'):
         W = tf.Variable(tf.zeros([hidden_layer_sizes[0],hidden_layer_sizes[1]]))
         b = tf.Variable(tf.zeros([hidden_layer_sizes[1]]))
         h2 = tf.matmul(h1,W)
-        h2 = tf.bias_add(h2,b)
+        h2 = tf.nn.bias_add(h2,b)
     with tf.variable_scope('out_mean'):
         W = tf.Variable(tf.zeros([hidden_layer_sizes[1],output_size]))
         b = tf.Variable(tf.zeros([output_size]))
         h3 = tf.matmul(h2,W)
-        h3 = tf.bias_add(h3,b)
+        h3 = tf.nn.bias_add(h3,b)
     #fixed std dev
     with tf.variable_scope('out_std'):
         W = tf.Variable(tf.zeros([1,output_size]))
-        h3_std = tf.tile(tf.exp(W),[input_layer.get_shape()[0].value,1])
-
+        h3_std = tf.tile(tf.exp(W),tf.pack([tf.shape(h3)[0],1]))
     h3 = tf.reshape(h3,[-1,1,output_size])
     h3_std = tf.reshape(h3_std,[-1,1,output_size])
     output = tf.concat(1,[h3,h3_std])
@@ -82,6 +81,9 @@ class TRPOAgent(object):
         self.learning_rate = tf.placeholder(dtype,shape=(),name="learning_rate")
         self.clip = 5
         self.eps = 1e-8
+        self.count = None
+        self.mean = None
+        self.std = None
         if isinstance(env.action_space,Discrete):
             self.discrete = True
         else:
@@ -114,13 +116,13 @@ class TRPOAgent(object):
             self.dimensions = env.action_space.shape[0]
             self.prev_action = np.zeros((1, env.action_space.shape[0]))
             self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, 2,env.action_space.shape[0]], name="oldaction_dist")
-            action_dist_n = policy_model(self.obs)
-            self.action = action = tf.placeholder(dtype, shape=[None], name="action")
+            action_dist_n = policy_model(self.obs,self.dimensions)
+            self.action = action = tf.placeholder(dtype, shape=[None,env.action_space.shape[0]], name="action")
             self.action_dist_n = action_dist_n
             N = tf.shape(obs)[0]
             Nf = tf.cast(N, dtype)
-            logp_n = loglikelihood(actions,action_dist_n,self.dimensions)
-            oldlogp_n = loglikelihood(actions,oldaction_dist,self.dimensions)
+            logp_n = loglikelihood(action,action_dist_n,self.dimensions)
+            oldlogp_n = loglikelihood(action,oldaction_dist,self.dimensions)
             surr = -tf.reduce_sum( tf.exp(logp_n - oldlogp_n) * advant) / Nf
             kl = tf.reduce_mean(kl_divergence(action_dist_n,oldaction_dist,self.dimensions))
             ent = tf.reduce_mean(tf.reduce_sum(tf.log(action_dist_n[:,1,:]),1) + .5  *
@@ -142,7 +144,7 @@ class TRPOAgent(object):
         #filter the observations
         obs = self.obs_filter(obs)
         obs = np.expand_dims(obs, 0)
-        if self.prev_obs[0] == 0:
+        if self.prev_obs[0,0] == 0:
             self.prev_obs = obs
         obs_new = np.concatenate([obs, self.prev_obs, self.prev_action], 1)
 
@@ -156,21 +158,20 @@ class TRPOAgent(object):
             self.prev_action[0, action] = 1.0
         else:
             action = np.random.randn(self.dimensions) * action_dist_n[0,1,:] + action_dist_n[0,0,:]
-            self.prev_action = np.copy(action)
+            self.prev_action = np.expand_dims(np.copy(action),0)
         self.prev_obs = obs
         return action, action_dist_n, np.squeeze(obs_new)
 
-    def obs_filter(obs):
+    def obs_filter(self,obs):
         if not self.count:
             self.count = 1
-        if not self.mean:
+        if self.count == 1:
             self.mean = obs
+            self.std = np.square(self.mean)
+            self.std_val = self.std
         else:
             old_mean = np.copy(self.mean)
             self.mean = old_mean + (obs - old_mean)/self.count
-        if not self.std:
-            self.std = np.square(np.mean)
-        else:
             self.std_val = self.std_val + (obs - old_mean)*(obs - self.mean)
             self.std = np.sqrt(self.std_val/(self.count-1))
 
@@ -227,7 +228,7 @@ class TRPOAgent(object):
                 [path["rewards"].sum() for path in paths])
 
             print("\n********** Iteration %i ************" % i)
-            if episoderewards.mean() > 1.1 * self.env._env.spec.reward_threshold:
+            if episoderewards.mean() > 1.1 * self.env.spec.reward_threshold:
                 self.train = False
             if not self.train:
                 print("Episode mean: %f" % episoderewards.mean())

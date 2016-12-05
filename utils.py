@@ -68,7 +68,7 @@ class VF(object):
     def _features(self, path):
         o = path["obs"].astype('float32')
         o = o.reshape(o.shape[0], -1)
-        act = path["action_dists"].astype('float32')
+        act = np.reshape(path["action_dists"].astype('float32'),(o.shape[0],-1))
         l = len(path["rewards"])
         al = np.arange(l).reshape(-1, 1) / 10.0
         ret = np.concatenate([o, act, al, np.ones((l, 1))], axis=1)
