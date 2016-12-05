@@ -41,7 +41,8 @@ class TRPOAgent(object):
         self.action = action = tf.placeholder(tf.int64, shape=[None], name="action")
         self.advant = advant = tf.placeholder(dtype, shape=[None], name="advant")
         self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, env.action_space.n], name="oldaction_dist")
-
+        self.beta = .01
+        self.learning_rate = tf.placeholder(dtye,shape=(),name="learning_rate")
         # Create neural network.
         action_dist_n, _ = (pt.wrap(self.obs).
                             fully_connected(64, activation_fn=tf.nn.tanh).
@@ -59,26 +60,11 @@ class TRPOAgent(object):
         ent = tf.reduce_sum(-action_dist_n * tf.log(action_dist_n + eps)) / Nf
 
         self.losses = [surr, kl, ent]
-        self.pg = flatgrad(surr, var_list)
-        # KL divergence where first arg is fixed
-        # replace old->tf.stop_gradient from previous kl
-        kl_firstfixed = tf.reduce_sum(tf.stop_gradient(
-            action_dist_n) * tf.log(tf.stop_gradient(action_dist_n + eps) / (action_dist_n + eps))) / Nf
-        grads = tf.gradients(kl_firstfixed, var_list)
-        self.flat_tangent = tf.placeholder(dtype, shape=[None])
-        shapes = map(var_shape, var_list)
-        start = 0
-        tangents = []
-        for shape in shapes:
-            size = np.prod(shape)
-            param = tf.reshape(self.flat_tangent[start:(start + size)], shape)
-            tangents.append(param)
-            start += size
-        gvp = [tf.reduce_sum(g * t) for (g, t) in zip(grads, tangents)]
-        self.fvp = flatgrad(gvp, var_list)
-        self.gf = GetFlat(self.session, var_list)
-        self.sff = SetFromFlat(self.session, var_list)
+        self.proximal_loss = surr - self.beta * kl
+        self.learning_rate_value = 1e-2
+        self.train_op = tf.nn.GradientDescentOptimizer(learning_rate).minimize(self.proximal_loss)
         self.vf = VF(self.session)
+        self.kl_running_avg = 0
         self.session.run(tf.initialize_all_variables())
 
     def act(self, obs, *args):
@@ -133,8 +119,10 @@ class TRPOAgent(object):
 
             feed = {self.obs: obs_n,
                     self.action: action_n,
-                self.advant: advant_n,
-                    self.oldaction_dist: action_dist_n}
+                    self.advant: advant_n,
+                    self.oldaction_dist: action_dist_n,
+                    self.learning_rate = self.learning_rate_value,
+                    }
 
 
             episoderewards = np.array(
@@ -148,46 +136,37 @@ class TRPOAgent(object):
                 self.end_count += 1
                 if self.end_count > 100:
                     break
+            if i % 100:
+                if self.kl_running_avg < .1:
+                    #lower beta
+                    self.beta *= .8
+                elif self.kl_running_avg > .3:
+                    self.beta *= 1.2
+                self.learning_rate_value *= .95
             if self.train:
                 self.vf.fit(paths)
-                thprev = self.gf()
+                _,l,l_list = self.session.run(
+                                [self.train_op,
+                                self.proximal_loss,
+                                self.losses],
+                                feed_dict=feed)
 
-                def fisher_vector_product(p):
-                    feed[self.flat_tangent] = p
-                    return self.session.run(self.fvp, feed) + config.cg_damping * p
-
-                g = self.session.run(self.pg, feed_dict=feed)
-                stepdir = conjugate_gradient(fisher_vector_product, -g)
-                shs = .5 * stepdir.dot(fisher_vector_product(stepdir))
-                lm = np.sqrt(shs / config.max_kl)
-                fullstep = stepdir / lm
-                neggdotstepdir = -g.dot(stepdir)
-
-                def loss(th):
-                    self.sff(th)
-                    return self.session.run(self.losses[0], feed_dict=feed)
-                theta = linesearch(loss, thprev, fullstep, neggdotstepdir / lm)
-                self.sff(theta)
-
-                surrafter, kloldnew, entropy = self.session.run(
-                    self.losses, feed_dict=feed)
-                if kloldnew > 2.0 * config.max_kl:
-                    self.sff(thprev)
 
                 stats = {}
-
+                self.kl_running_avg = self.kl_running_avg * .8 + self.losses[1]*.2
                 numeptotal += len(episoderewards)
                 stats["Total number of episodes"] = numeptotal
                 stats["Average sum of rewards per episode"] = episoderewards.mean()
-                stats["Entropy"] = entropy
+                stats["Entropy"] = l_list[2]
                 exp = explained_variance(np.array(baseline_n), np.array(returns_n))
                 stats["Baseline explained"] = exp
                 stats["Time elapsed"] = "%.2f mins" % ((time.time() - start_time) / 60.0)
-                stats["KL between old and new distribution"] = kloldnew
-                stats["Surrogate loss"] = surrafter
+                stats["KL between old and new distribution"] = l_list[1]
+                stats["Surrogate loss"] = l_list[0]
                 for k, v in stats.iteritems():
                     print(k + ": " + " " * (40 - len(k)) + str(v))
                 if entropy != entropy:
+                    #NaN
                     exit(-1)
                 if exp > 0.8:
                     self.train = False
@@ -211,5 +190,3 @@ agent.learn()
 env.monitor.close()
 gym.upload(training_dir,
            algorithm_id='trpo_ff')
-
-
