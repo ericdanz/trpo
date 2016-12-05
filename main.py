@@ -64,11 +64,12 @@ class TRPOAgent(object):
         ent = tf.reduce_sum(-action_dist_n * tf.log(action_dist_n + eps)) / Nf
 
         self.losses = [surr, kl, ent]
-        self.proximal_loss = surr - self.beta * kl
+        self.proximal_loss = surr + self.beta * kl
         self.learning_rate_value = 1e-2
         self.train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.proximal_loss)
         self.vf = VF(self.session)
         self.kl_running_avg = 0
+        self.surr_running_avg = 0
         self.session.run(tf.initialize_all_variables())
 
     def act(self, obs, *args):
@@ -140,12 +141,12 @@ class TRPOAgent(object):
                 self.end_count += 1
                 if self.end_count > 100:
                     break
-            if i % 100:
-                if self.kl_running_avg < 1e-9:
+            if i % 100 == 0 and i > 1:
+                if self.kl_running_avg*self.beta < .1 * self.surr_running_avg:
                     #lower beta
-                    self.beta *= .8
-                elif self.kl_running_avg > 1e-7:
-                    self.beta *= 1.2
+                    self.beta *= .1
+                elif self.kl_running_avg*self.beta > 10 * self.surr_running_avg:
+                    self.beta *= 10
                 self.learning_rate_value *= .95
             if self.train:
                 self.vf.fit(paths)
@@ -158,6 +159,7 @@ class TRPOAgent(object):
 
                 stats = {}
                 self.kl_running_avg = self.kl_running_avg * .8 + np.abs(l_list[1])*.2
+                self.surr_running_avg = self.surr_running_avg * .8 + np.abs(l_list[0])*.2
                 numeptotal += len(episoderewards)
                 stats["Total number of episodes"] = numeptotal
                 stats["Average sum of rewards per episode"] = episoderewards.mean()
