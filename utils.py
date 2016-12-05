@@ -56,8 +56,8 @@ class VF(object):
         self.x = tf.placeholder(tf.float32, shape=[None, shape], name="x")
         self.y = tf.placeholder(tf.float32, shape=[None], name="y")
         self.net = (pt.wrap(self.x).
-                    fully_connected(64, activation_fn=tf.nn.relu).
-                    fully_connected(64, activation_fn=tf.nn.relu).
+                    fully_connected(64, activation_fn=tf.nn.elu).
+                    fully_connected(64, activation_fn=tf.nn.elu).
                     fully_connected(1))
         self.net = tf.reshape(self.net, (-1, ))
         l2 = (self.net - self.y) * (self.net - self.y)
