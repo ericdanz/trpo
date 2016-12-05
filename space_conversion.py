@@ -63,13 +63,13 @@ class SpaceConversionEnv(Env):
     convertable = {(Tuple, Discrete): (tuple2discrete4obj, discrete2tuple4obj, tuple2discrete4class), \
                    (Discrete, Box): (discrete2box4obj, box2discrete4obj, discrete2box4class), \
                    (Box, Box): (box2box4obj, box2box4obj, box2box4class)}
-    
+
     def __init__(self, env, target_observation_space=None, target_action_space=None, verbose=False):
         self._verbose = verbose
         self._env = env
         self.action_convert = None
         self.observation_convert = None
-        for pairs, convert in self.convertable.iteritems():
+        for pairs, convert in self.convertable.items():
             if env.action_space.__class__ == pairs[0] and \
                target_action_space == pairs[1] and \
                self.action_convert is None:
@@ -82,7 +82,7 @@ class SpaceConversionEnv(Env):
                 self._observation_space_ = convert[2](env.observation_space)
 
         if self.action_convert is None and \
-           (self.action_space.__class__ == target_action_space or 
+           (self.action_space.__class__ == target_action_space or
              target_action_space is None):
             self.action_convert = ident4obj
             self._action_space = env.action_space
@@ -102,7 +102,7 @@ class SpaceConversionEnv(Env):
         step = self._env.step(conv_action, **kwargs)
         observation, reward, done, info = step
 
-        conv_observation = self.observation_convert(observation, self._env.observation_space, self.observation_space)  
+        conv_observation = self.observation_convert(observation, self._env.observation_space, self.observation_space)
 
         if self._verbose and self.observation_convert != ident4obj:
             print("Input observation: %s, converted observation: %s" % (observation, conv_observation))
@@ -115,7 +115,7 @@ class SpaceConversionEnv(Env):
         if self._verbose and self.observation_convert != ident4obj:
             print("Input observation: %s, converted observation: %s" % (observation, conv_observation))
         return conv_observation
-  
+
     @property
     def action_space(self):
         return self._action_space_
@@ -131,7 +131,7 @@ class SpaceConversionEnv(Env):
         if hasattr(self._env, field):
             return getattr(self._env, field)
         raise AttributeError(field)
-  
+
     def __repr__(self):
         if "object at" not in str(self._env):
             env_name = str(env._env)

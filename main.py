@@ -36,13 +36,17 @@ class TRPOAgent(object):
         self.obs = obs = tf.placeholder(
             dtype, shape=[
                 None, 2 * env.observation_space.shape[0] + env.action_space.n], name="obs")
+        if isinstance(env.action_space,Discrete):
+            self.dimensions = env.action_space.n
+        elif isinstance(env.action_space,Box):
+            self.dimensions = env.action_space.shape[0]
         self.prev_obs = np.zeros((1, env.observation_space.shape[0]))
         self.prev_action = np.zeros((1, env.action_space.n))
         self.action = action = tf.placeholder(tf.int64, shape=[None], name="action")
         self.advant = advant = tf.placeholder(dtype, shape=[None], name="advant")
         self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, env.action_space.n], name="oldaction_dist")
         self.beta = .01
-        self.learning_rate = tf.placeholder(dtye,shape=(),name="learning_rate")
+        self.learning_rate = tf.placeholder(dtype,shape=(),name="learning_rate")
         # Create neural network.
         action_dist_n, _ = (pt.wrap(self.obs).
                             fully_connected(64, activation_fn=tf.nn.tanh).
@@ -62,7 +66,7 @@ class TRPOAgent(object):
         self.losses = [surr, kl, ent]
         self.proximal_loss = surr - self.beta * kl
         self.learning_rate_value = 1e-2
-        self.train_op = tf.nn.GradientDescentOptimizer(learning_rate).minimize(self.proximal_loss)
+        self.train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.proximal_loss)
         self.vf = VF(self.session)
         self.kl_running_avg = 0
         self.session.run(tf.initialize_all_variables())
@@ -121,14 +125,14 @@ class TRPOAgent(object):
                     self.action: action_n,
                     self.advant: advant_n,
                     self.oldaction_dist: action_dist_n,
-                    self.learning_rate = self.learning_rate_value,
+                    self.learning_rate : self.learning_rate_value,
                     }
 
 
             episoderewards = np.array(
                 [path["rewards"].sum() for path in paths])
 
-            print "\n********** Iteration %i ************" % i
+            print("\n********** Iteration %i ************" % i)
             if episoderewards.mean() > 1.1 * self.env._env.spec.reward_threshold:
                 self.train = False
             if not self.train:
@@ -137,10 +141,10 @@ class TRPOAgent(object):
                 if self.end_count > 100:
                     break
             if i % 100:
-                if self.kl_running_avg < .1:
+                if self.kl_running_avg < 1e-9:
                     #lower beta
                     self.beta *= .8
-                elif self.kl_running_avg > .3:
+                elif self.kl_running_avg > 1e-7:
                     self.beta *= 1.2
                 self.learning_rate_value *= .95
             if self.train:
@@ -153,7 +157,7 @@ class TRPOAgent(object):
 
 
                 stats = {}
-                self.kl_running_avg = self.kl_running_avg * .8 + self.losses[1]*.2
+                self.kl_running_avg = self.kl_running_avg * .8 + np.abs(l_list[1])*.2
                 numeptotal += len(episoderewards)
                 stats["Total number of episodes"] = numeptotal
                 stats["Average sum of rewards per episode"] = episoderewards.mean()
@@ -162,10 +166,11 @@ class TRPOAgent(object):
                 stats["Baseline explained"] = exp
                 stats["Time elapsed"] = "%.2f mins" % ((time.time() - start_time) / 60.0)
                 stats["KL between old and new distribution"] = l_list[1]
+                stats["KL penalty"] = self.beta
                 stats["Surrogate loss"] = l_list[0]
-                for k, v in stats.iteritems():
+                for k, v in stats.items():
                     print(k + ": " + " " * (40 - len(k)) + str(v))
-                if entropy != entropy:
+                if l_list[2] != l_list[2]:
                     #NaN
                     exit(-1)
                 if exp > 0.8:

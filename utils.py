@@ -23,7 +23,7 @@ def rollout(env, agent, max_pathlength, n_timesteps):
         ob = env.reset()
         agent.prev_action *= 0.0
         agent.prev_obs *= 0.0
-        for _ in xrange(max_pathlength):
+        for _ in range(max_pathlength):
             action, action_dist, ob = agent.act(ob)
             obs.append(ob)
             actions.append(action)
@@ -63,7 +63,7 @@ class VF(object):
         l2 = (self.net - self.y) * (self.net - self.y)
         self.train = tf.train.AdamOptimizer().minimize(l2)
         self.session.run(tf.initialize_all_variables())
-        
+
 
     def _features(self, path):
         o = path["obs"].astype('float32')
@@ -84,7 +84,7 @@ class VF(object):
 
     def predict(self, path):
         if self.net is None:
-            return np.zeros(len(path["rewards"])) 
+            return np.zeros(len(path["rewards"]))
         else:
             ret = self.session.run(self.net, {self.x: self._features(path)})
             return np.reshape(ret, (ret.shape[0], ))
@@ -95,7 +95,7 @@ def cat_sample(prob_nk):
     N = prob_nk.shape[0]
     csprob_nk = np.cumsum(prob_nk, axis=1)
     out = np.zeros(N, dtype='i')
-    for (n, csprob_k, r) in zip(xrange(N), csprob_nk, np.random.rand(N)):
+    for (n, csprob_k, r) in zip(range(N), csprob_nk, np.random.rand(N)):
         for (k, csprob) in enumerate(csprob_k):
             if csprob > r:
                 out[n] = k
@@ -186,7 +186,7 @@ def conjugate_gradient(f_Ax, b, cg_iters=10, residual_tol=1e-10):
     r = b.copy()
     x = np.zeros_like(b)
     rdotr = r.dot(r)
-    for i in xrange(cg_iters):
+    for i in range(cg_iters):
         z = f_Ax(p)
         v = rdotr / p.dot(z)
         x += v * p
