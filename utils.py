@@ -20,6 +20,7 @@ def rollout(env, agent, max_pathlength, n_timesteps):
     timesteps_sofar = 0
     while timesteps_sofar < n_timesteps:
         obs, actions, rewards, action_dists = [], [], [], []
+        terminated = False
         ob = env.reset()
         agent.prev_action *= 0.0
         agent.prev_obs *= 0.0
@@ -32,14 +33,16 @@ def rollout(env, agent, max_pathlength, n_timesteps):
             ob = res[0]
             rewards.append(res[1])
             if res[2]:
-                path = {"obs": np.concatenate(np.expand_dims(obs, 0)),
-                        "action_dists": np.concatenate(action_dists),
-                        "rewards": np.array(rewards),
-                        "actions": np.array(actions)}
-                paths.append(path)
-                agent.prev_action *= 0.0
-                agent.prev_obs *= 0.0
+                terminated = True
                 break
+        path = {"obs": np.concatenate(np.expand_dims(obs, 0)),
+                "action_dists": np.concatenate(action_dists),
+                "rewards": np.array(rewards),
+                "actions": np.array(actions),
+                "terminated": terminated}
+        paths.append(path)
+        agent.prev_action *= 0.0
+        agent.prev_obs *= 0.0
         timesteps_sofar += len(path["rewards"])
     return paths
 
