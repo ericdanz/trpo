@@ -74,7 +74,7 @@ class TRPOAgent(object):
 
     config = dict2(**{
         "timesteps_per_batch": 15000,
-        "max_pathlength": 500,
+        "max_pathlength": 250,
         "max_kl": 0.01,
         "cg_damping": 0.1,
         "gamma": 0.95})
@@ -91,7 +91,7 @@ class TRPOAgent(object):
         self.train = True
         self.prev_obs = np.zeros((1, env.observation_space.shape[0]))
         self.advant = advant = tf.placeholder(dtype, shape=[None], name="advant")
-        self.beta = .01
+        self.beta = 1
         self.learning_rate = tf.placeholder(dtype,shape=(),name="learning_rate")
         self.clip = 5
         self.eps = 1e-8
@@ -155,9 +155,14 @@ class TRPOAgent(object):
 
         self.losses = [surr, kl, ent]
         self.proximal_loss = surr + self.beta * kl
-        self.learning_rate_value = 1e-1
-        # self.train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.proximal_loss)
-        self.train_op = tf.train.AdamOptimizer(self.learning_rate,beta1=.1,beta2=.1).minimize(self.proximal_loss)
+        self.learning_rate_value = 1
+        self.optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+        self.train_op = self.optimizer.minimize(self.proximal_loss)
+        self.grads_and_vars = self.optimizer.compute_gradients(self.proximal_loss,tf.trainable_variables())
+        self.neg_grads_and_vars = [(-gv[0]/10.0,gv[1]) for gv in self.grads_and_vars]
+        self.apply_grads = self.optimizer.apply_gradients(self.grads_and_vars)
+        self.apply_neg_grads = self.optimizer.apply_gradients(self.neg_grads_and_vars)
+        # self.train_op = tf.train.AdamOptimizer(self.learning_rate,beta1=.1,beta2=.1).minimize(self.proximal_loss)
         #see if separating them does anything to learning
         self.surr_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(surr)
         self.kl_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.beta * kl)
@@ -242,12 +247,6 @@ class TRPOAgent(object):
             #
             # advant_n /= (advant_n.std() + self.eps)
 
-            feed = {self.obs: obs_n,
-                    self.action: action_n,
-                    self.advant: advant_n,
-                    self.oldaction_dist: action_dist_n,
-                    self.learning_rate : self.learning_rate_value,
-                    }
 
 
             episoderewards = np.array(
@@ -274,10 +273,51 @@ class TRPOAgent(object):
                 self.learning_rate_value *= .1
             if self.train:
                 self.vf.fit(paths)
-                _,l = self.session.run(
-                                [self.train_op,
-                                self.proximal_loss],
-                                feed_dict=feed)
+                batch_idx = 0
+                batch_size = obs_n.shape[0] // 100
+                for mb in range(10):
+                    #randomize the batch
+                    indices = np.arange(obs_n.shape[0])
+                    np.random.shuffle(indices)
+                    #split into mini batches
+                    feed = {self.obs: obs_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
+                            self.action: action_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
+                            self.advant: advant_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
+                            self.oldaction_dist: action_dist_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
+                            self.learning_rate : self.learning_rate_value,
+                            }
+
+
+                    _,l,kl_val,grads = self.session.run(
+                                    [self.train_op,self.proximal_loss,
+                                    self.losses[1],self.grads_and_vars],
+                                    feed_dict=feed)
+                    print("grads",grads)
+                    print("proximal loss: {}  kl: {}".format(l,kl_val))
+                    if kl_val > .1:
+                        _,kl = self.session.run([self.apply_grads,self.losses[1]],feed_dict=feed)
+                        print("kl: {}".format(kl_val))
+                        break
+                # # randomize the batch
+                # indices = np.arange(obs_n.shape[0])
+                # np.random.shuffle(indices)
+                # #split into mini batches
+                # feed = {self.obs: obs_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
+                #         self.action: action_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
+                #         self.advant: advant_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
+                #         self.oldaction_dist: action_dist_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
+                #         self.learning_rate : self.learning_rate_value,
+                #         }
+                #
+                #
+                # _,l,kl_val = self.session.run(
+                #                 [self.train_op,self.proximal_loss,self.losses[1]],
+                #                 feed_dict=feed)
+                # print("proximal loss: {}  kl: {}".format(l,kl_val))
+                # if kl_val > .1:
+                #     _,kl = self.session.run([self.apply_grads,self.losses[1]],feed_dict=feed)
+                #     print("kl: {}".format(kl_val))
+                #     break
 
                 l_list = self.session.run(
                                 [self.losses],
