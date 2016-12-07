@@ -20,7 +20,7 @@ def policy_model(input_layer,hidden_layer_sizes=[64,64],task_size=False,output_s
     net = input_layer
     for i,hidden_size in enumerate(hidden_layer_sizes):
         with tf.variable_scope('h{}'.format(i)):
-            W = tf.Variable(tf.zeros([net.get_shape()[1].value,hidden_size]))
+            W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_size])*.1)
             b = tf.Variable(tf.zeros([hidden_size]))
             h = tf.nn.bias_add(tf.matmul(net,W),b)
             a = tf.nn.tanh(h)
@@ -33,24 +33,26 @@ def policy_model(input_layer,hidden_layer_sizes=[64,64],task_size=False,output_s
     #fixed std dev
     with tf.variable_scope('out_std'):
         W = tf.Variable(tf.zeros([1,output_size]))
-        h3_std = tf.tile(tf.exp(W),tf.pack([tf.shape(h3)[0],1]))
-    h3 = tf.reshape(h3,[-1,1,output_size])
-    h3_std = tf.reshape(h3_std,[-1,1,output_size])
+        h3_std = tf.tile(W,tf.pack([tf.shape(h3)[0],1]))
+    h3 = tf.reshape(h3,[-1,output_size])
+    h3_std = tf.reshape(h3_std,[-1,output_size])
     output = tf.concat(1,[h3,h3_std])
 
     return output
 
 def loglikelihood(actions,action_dist,dims):
-    mean_n = tf.reshape(action_dist[:,0,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
-    std_n = tf.reshape(action_dist[:,1,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
+    mean_n = tf.reshape(action_dist[:,:dims],[tf.shape(action_dist)[0],dims])
+    std_n = tf.exp(tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims]))
+    # std_n = tf.reshape(action_dist[:,1,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
     return -0.5 * tf.reduce_sum(tf.square((actions-mean_n) / std_n),1) \
                 -0.5 * tf.log(2.0*np.pi)*dims - tf.reduce_sum(tf.log(std_n),1)
 
 def kl_divergence(action_dist,oldaction_dist,dims):
-    mean_n = tf.reshape(action_dist[:,0,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
-    std_n = tf.reshape(action_dist[:,1,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
-    oldmean_n = tf.reshape(oldaction_dist[:,0,:],[tf.shape(oldaction_dist)[0],tf.shape(oldaction_dist)[2]])
-    oldstd_n = tf.reshape(oldaction_dist[:,1,:],[tf.shape(oldaction_dist)[0],tf.shape(oldaction_dist)[2]])
+    mean_n = tf.reshape(action_dist[:,:dims],[tf.shape(action_dist)[0],dims])
+    std_n = tf.exp(tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims]))
+    # std_n = tf.reshape(action_dist[:,1,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
+    oldmean_n = tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims])
+    oldstd_n = tf.exp(tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims]))
     return (tf.reduce_sum(tf.log(std_n/oldstd_n),1) + tf.reduce_sum((tf.square(oldstd_n)+
         tf.square(oldmean_n - mean_n)) / (2.0 * tf.square(std_n)),1) - 0.5*dims)
 
@@ -114,7 +116,7 @@ class TRPOAgent(object):
                     None, 2 * env.observation_space.shape[0] + env.action_space.n], name="obs")
             self.dimensions = env.action_space.n
             self.prev_action = np.zeros((1, env.action_space.n))
-            self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, env.action_space.n], name="oldaction_dist")
+            self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, 2*env.action_space.n], name="oldaction_dist")
             self.action = action = tf.placeholder(tf.int64, shape=[None], name="action")
             action_dist_n, _ = (pt.wrap(self.obs).
                                 fully_connected(64, activation_fn=tf.nn.tanh).
@@ -135,10 +137,11 @@ class TRPOAgent(object):
                     None, 2 * env.observation_space.shape[0] + env.action_space.shape[0]], name="obs")
             self.dimensions = env.action_space.shape[0]
             self.prev_action = np.zeros((1, env.action_space.shape[0]))
-            self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, 2,env.action_space.shape[0]], name="oldaction_dist")
-            action_dist_n = policy_model(self.obs,
-                                        hidden_layer_sizes=[60,60],
-                                        output_size=self.dimensions)
+            self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, env.action_space.shape[0]*2], name="oldaction_dist")
+            with self.session as sess:
+                action_dist_n = policy_model(self.obs,
+                                            hidden_layer_sizes=[60,60],
+                                            output_size=self.dimensions)
             self.action = action = tf.placeholder(dtype, shape=[None,env.action_space.shape[0]], name="action")
             self.action_dist_n = action_dist_n
             N = tf.shape(obs)[0]
@@ -147,23 +150,24 @@ class TRPOAgent(object):
             oldlogp_n = loglikelihood(action,oldaction_dist,self.dimensions)
             surr = -tf.reduce_sum( tf.exp(logp_n - oldlogp_n) * advant) / Nf
             kl = tf.reduce_mean(kl_divergence(action_dist_n,oldaction_dist,self.dimensions))
-            ent = tf.reduce_mean(tf.reduce_sum(tf.log(action_dist_n[:,1,:]),1) + .5  *
+            ent = tf.reduce_mean(tf.reduce_sum(action_dist_n[:,self.dimensions:],1) + .5  *
             np.log(2*np.pi*np.e) * self.dimensions)
+            # ent = tf.Variable(0)
 
         # Create neural network.
 
 
         self.losses = [surr, kl, ent]
         self.proximal_loss = surr + self.beta * kl
-        self.learning_rate_value = 1
+        self.learning_rate_value = .1
         self.optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
         self.train_op = self.optimizer.minimize(self.proximal_loss)
-        self.grads_and_vars = self.optimizer.compute_gradients(self.proximal_loss,tf.trainable_variables())
-        self.neg_grads_and_vars = [(-gv[0]/10.0,gv[1]) for gv in self.grads_and_vars]
-        self.apply_grads = self.optimizer.apply_gradients(self.grads_and_vars)
-        self.apply_neg_grads = self.optimizer.apply_gradients(self.neg_grads_and_vars)
+        # self.grads_and_vars = self.optimizer.compute_gradients(self.proximal_loss,tf.trainable_variables())
+        # self.neg_grads_and_vars = [(-gv[0]/10.0,gv[1]) for gv in self.grads_and_vars]
+        # self.apply_grads = self.optimizer.apply_gradients(self.grads_and_vars)
+        # self.apply_neg_grads = self.optimizer.apply_gradients(self.neg_grads_and_vars)
         self.scipy_optimizer = ScipyOptimizerInterface(self.proximal_loss,options={'maxiter': 10})
-        # self.train_op = tf.train.AdamOptimizer(self.learning_rate,beta1=.1,beta2=.1).minimize(self.proximal_loss)
+        self.train_op = tf.train.AdamOptimizer(self.learning_rate,beta1=.1,beta2=.1).minimize(self.proximal_loss)
         #see if separating them does anything to learning
         self.surr_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(surr)
         self.kl_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.beta * kl)
@@ -171,10 +175,11 @@ class TRPOAgent(object):
         self.kl_running_avg = 0
         self.surr_running_avg = 0
         self.session.run(tf.initialize_all_variables())
+        self.weights = [tf.reduce_mean(v) for v in tf.trainable_variables() if v.name[:2]=='h0']
 
     def act(self, obs, *args):
         #filter the observations
-        obs = self.obs_filter(obs)
+        # obs = self.obs_filter(obs)
         obs = np.expand_dims(obs, 0)
         if self.prev_obs[0,0] == 0:
             self.prev_obs = obs
@@ -189,7 +194,9 @@ class TRPOAgent(object):
             self.prev_action *= 0.0
             self.prev_action[0, action] = 1.0
         else:
-            action = np.random.randn(self.dimensions) * action_dist_n[0,1,:] + action_dist_n[0,0,:]
+            # action = np.random.randn(self.dimensions) * action_dist_n[0,1,:] + action_dist_n[0,0,:]
+            # print(action_dist_n.shape)
+            action = np.random.randn(self.dimensions) * np.exp(action_dist_n[0,self.dimensions:]) + action_dist_n[0,:self.dimensions]
             self.prev_action = np.expand_dims(np.copy(action),0)
         self.prev_obs = obs
         return action, action_dist_n, np.squeeze(obs_new)
@@ -288,7 +295,17 @@ class TRPOAgent(object):
                 self.scipy_optimizer.minimize(self.session,
                         feed_dict=feed)
 
-
+                ad = self.session.run(
+                                [self.action_dist_n],
+                                feed_dict=feed)
+                ad = ad[0]
+                print(ad.shape)
+                print(np.mean(ad[:,:],axis=0))#,np.mean(ad[:,1,:],axis=0))
+                print(np.std(ad[:,:],axis=0))#,np.std(ad[:,1,:],axis=0))
+                w = self.session.run(
+                                [self.weights],
+                                feed_dict=feed)
+                print("weights",w)
                 l_list = self.session.run(
                                 [self.losses],
                                 feed_dict=feed)
@@ -328,8 +345,8 @@ class TRPOAgent(object):
 
                 for k, v in stats.items():
                     print(k + ": " + " " * (40 - len(k)) + str(v))
-                if l_list[2] != l_list[2]:
-                    #NaN
-                    exit(-1)
+                # if l_list[2] != l_list[2]:
+                #     #NaN
+                #     exit(-1)
 
             i += 1
