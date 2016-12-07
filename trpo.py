@@ -14,7 +14,7 @@ import tempfile
 import sys
 import datetime
 import subprocess
-
+from external_optimizer import ScipyOptimizerInterface
 
 def policy_model(input_layer,hidden_layer_sizes=[64,64],task_size=False,output_size=3):
     net = input_layer
@@ -162,6 +162,7 @@ class TRPOAgent(object):
         self.neg_grads_and_vars = [(-gv[0]/10.0,gv[1]) for gv in self.grads_and_vars]
         self.apply_grads = self.optimizer.apply_gradients(self.grads_and_vars)
         self.apply_neg_grads = self.optimizer.apply_gradients(self.neg_grads_and_vars)
+        self.scipy_optimizer = ScipyOptimizerInterface(self.proximal_loss,options={'maxiter': 10})
         # self.train_op = tf.train.AdamOptimizer(self.learning_rate,beta1=.1,beta2=.1).minimize(self.proximal_loss)
         #see if separating them does anything to learning
         self.surr_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(surr)
@@ -273,51 +274,20 @@ class TRPOAgent(object):
                 self.learning_rate_value *= .1
             if self.train:
                 self.vf.fit(paths)
-                batch_idx = 0
-                batch_size = obs_n.shape[0] // 100
-                for mb in range(10):
-                    #randomize the batch
-                    indices = np.arange(obs_n.shape[0])
-                    np.random.shuffle(indices)
-                    #split into mini batches
-                    feed = {self.obs: obs_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
-                            self.action: action_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
-                            self.advant: advant_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
-                            self.oldaction_dist: action_dist_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
-                            self.learning_rate : self.learning_rate_value,
-                            }
 
+                feed = {self.obs: obs_n,
+                        self.action: action_n,
+                        self.advant: advant_n,
+                        self.oldaction_dist: action_dist_n,
+                        self.learning_rate : self.learning_rate_value,
+                        }
 
-                    _,l,kl_val,grads = self.session.run(
-                                    [self.train_op,self.proximal_loss,
-                                    self.losses[1],self.grads_and_vars],
-                                    feed_dict=feed)
-                    print("grads",grads)
-                    print("proximal loss: {}  kl: {}".format(l,kl_val))
-                    if kl_val > .1:
-                        _,kl = self.session.run([self.apply_grads,self.losses[1]],feed_dict=feed)
-                        print("kl: {}".format(kl_val))
-                        break
-                # # randomize the batch
-                # indices = np.arange(obs_n.shape[0])
-                # np.random.shuffle(indices)
-                # #split into mini batches
-                # feed = {self.obs: obs_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
-                #         self.action: action_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
-                #         self.advant: advant_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
-                #         self.oldaction_dist: action_dist_n[indices[batch_idx*batch_size:(batch_idx+1)*batch_size]],
-                #         self.learning_rate : self.learning_rate_value,
-                #         }
-                #
-                #
-                # _,l,kl_val = self.session.run(
-                #                 [self.train_op,self.proximal_loss,self.losses[1]],
+                # _ = self.session.run(
+                #                 [self.train_op],
                 #                 feed_dict=feed)
-                # print("proximal loss: {}  kl: {}".format(l,kl_val))
-                # if kl_val > .1:
-                #     _,kl = self.session.run([self.apply_grads,self.losses[1]],feed_dict=feed)
-                #     print("kl: {}".format(kl_val))
-                #     break
+                self.scipy_optimizer.minimize(self.session,
+                        feed_dict=feed)
+
 
                 l_list = self.session.run(
                                 [self.losses],
