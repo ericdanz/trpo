@@ -18,25 +18,37 @@ from external_optimizer import ScipyOptimizerInterface
 
 def policy_model(input_layer,hidden_layer_sizes=[64,64],task_size=False,output_size=3):
     net = input_layer
-    for i,hidden_size in enumerate(hidden_layer_sizes):
-        with tf.variable_scope('h{}'.format(i)):
-            W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_size])*.1)
-            b = tf.Variable(tf.zeros([hidden_size]))
-            h = tf.nn.bias_add(tf.matmul(net,W),b)
+    # for i,hidden_size in enumerate(hidden_layer_sizes):
+    #     with tf.variable_scope('h{}'.format(i)):
+    #         W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_size])*.1)
+    #         b = tf.Variable(tf.zeros([hidden_size]))
+    #         h = tf.matmul(net,W) + b
+    #         a = tf.nn.tanh(h)
+    #     net = a
+    with tf.variable_scope('policy'):
+        with tf.variable_scope('h0'):
+            W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_layer_sizes[0]])*.1)
+            b = tf.Variable(tf.zeros([hidden_layer_sizes[0]]))
+            h = tf.matmul(net,W) + b
             a = tf.nn.tanh(h)
         net = a
-
-    with tf.variable_scope('out_mean'):
-        W = tf.Variable(tf.zeros([net.get_shape()[1].value,output_size]))
-        b = tf.Variable(tf.zeros([output_size]))
-        h3 = tf.nn.bias_add(tf.matmul(net,W),b)
-    #fixed std dev
-    with tf.variable_scope('out_std'):
-        W = tf.Variable(tf.zeros([1,output_size]))
-        h3_std = tf.tile(W,tf.pack([tf.shape(h3)[0],1]))
-    h3 = tf.reshape(h3,[-1,output_size])
-    h3_std = tf.reshape(h3_std,[-1,output_size])
-    output = tf.concat(1,[h3,h3_std])
+        with tf.variable_scope('h1'):
+            W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_layer_sizes[0]])*.1)
+            b = tf.Variable(tf.zeros([hidden_layer_sizes[0]]))
+            h = tf.matmul(net,W) + b
+            a = tf.nn.tanh(h)
+        net = a
+        with tf.variable_scope('out_mean'):
+            W = tf.Variable(tf.zeros([net.get_shape()[1].value,output_size]))
+            b = tf.Variable(tf.zeros([output_size]))
+            h3 = tf.matmul(net,W) + b
+        #fixed std dev
+        with tf.variable_scope('out_std'):
+            W = tf.Variable(tf.zeros([1,output_size]))
+            h3_std = tf.tile(W,tf.pack([tf.shape(h3)[0],1]))
+        h3 = tf.reshape(h3,[-1,output_size])
+        h3_std = tf.reshape(h3_std,[-1,output_size])
+        output = tf.concat(1,[h3,h3_std])
 
     return output
 
@@ -47,14 +59,14 @@ def loglikelihood(actions,action_dist,dims):
     return -0.5 * tf.reduce_sum(tf.square((actions-mean_n) / std_n),1) \
                 -0.5 * tf.log(2.0*np.pi)*dims - tf.reduce_sum(tf.log(std_n),1)
 
-def kl_divergence(action_dist,oldaction_dist,dims):
-    mean_n = tf.reshape(action_dist[:,:dims],[tf.shape(action_dist)[0],dims])
-    std_n = tf.exp(tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims]))
+def kl_divergence(action_dist_0,action_dist_1,dims):
+    mean_0 = tf.reshape(action_dist_0[:,:dims],[tf.shape(action_dist_0)[0],dims])
+    std_0 = tf.exp(tf.reshape(action_dist_0[:,dims:],[tf.shape(action_dist_0)[0],dims]))
     # std_n = tf.reshape(action_dist[:,1,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
-    oldmean_n = tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims])
-    oldstd_n = tf.exp(tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims]))
-    return (tf.reduce_sum(tf.log(std_n/oldstd_n),1) + tf.reduce_sum((tf.square(oldstd_n)+
-        tf.square(oldmean_n - mean_n)) / (2.0 * tf.square(std_n)),1) - 0.5*dims)
+    mean_1 = tf.reshape(action_dist_1[:,dims:],[tf.shape(action_dist_0)[0],dims])
+    std_1 = tf.exp(tf.reshape(action_dist_1[:,dims:],[tf.shape(action_dist_0)[0],dims]))
+    return (tf.reduce_sum(tf.log(std_1/std_0),1) + tf.reduce_sum((tf.square(std_0)+
+        tf.square(mean_0 - mean_1)) / (2.0 * tf.square(std_1)),1) - 0.5*dims)
 
 def compute_advantage(vf, paths, gamma=.999, lam=.99):
     # Compute return, baseline, advantage
@@ -149,25 +161,47 @@ class TRPOAgent(object):
             logp_n = loglikelihood(action,action_dist_n,self.dimensions)
             oldlogp_n = loglikelihood(action,oldaction_dist,self.dimensions)
             surr = -tf.reduce_sum( tf.exp(logp_n - oldlogp_n) * advant) / Nf
-            kl = tf.reduce_mean(kl_divergence(action_dist_n,oldaction_dist,self.dimensions))
+            kl = tf.reduce_mean(kl_divergence(oldaction_dist,action_dist_n,self.dimensions))
             ent = tf.reduce_mean(tf.reduce_sum(action_dist_n[:,self.dimensions:],1) + .5  *
             np.log(2*np.pi*np.e) * self.dimensions)
             # ent = tf.Variable(0)
 
         # Create neural network.
 
-
+        var_list = tf.get_collection(tf.GraphKeys.VARIABLES, scope='policy')
         self.losses = [surr, kl, ent]
+        self.pg = flatgrad(surr,var_list)
+        grads = tf.gradients(tf.reduce_mean(kl_divergence(tf.stop_gradient(action_dist_n),action_dist_n,self.dimensions)),var_list)
+        self.flat_tangent = tf.placeholder(dtype,shape=[None])
+        shapes = []
+        for v in var_list:
+            shapes.append( var_shape(v) )
+        start = 0
+        tangents = []
+        for shape in shapes:
+            size = np.prod(shape)
+            param = tf.reshape(self.flat_tangent[start:(start + size)], shape)
+            tangents.append(param)
+            start += size
+        gvp = [tf.reduce_sum(g * t) for (g, t) in zip(grads, tangents)]
+        self.fvp = flatgrad(gvp, var_list)
+        self.gf = GetFlat(self.session, var_list)
+        self.sff = SetFromFlat(self.session, var_list)
         self.proximal_loss = surr + self.beta * kl
-        self.learning_rate_value = .1
-        self.optimizer = tf.train.GradientDescentOptimizer(self.learning_rate)
+        self.learning_rate_value = 1
+        self.optimizer = tf.train.GradientDescentOptimizer(1)
+        self.sffg = SetFromFlatGrads(self.session,self.optimizer,var_list)
+
         self.train_op = self.optimizer.minimize(self.proximal_loss)
-        # self.grads_and_vars = self.optimizer.compute_gradients(self.proximal_loss,tf.trainable_variables())
-        # self.neg_grads_and_vars = [(-gv[0]/10.0,gv[1]) for gv in self.grads_and_vars]
-        # self.apply_grads = self.optimizer.apply_gradients(self.grads_and_vars)
-        # self.apply_neg_grads = self.optimizer.apply_gradients(self.neg_grads_and_vars)
+        self.grads_and_vars = self.optimizer.compute_gradients(self.proximal_loss,var_list)
+        print(self.grads_and_vars[0][0].get_shape())
+        self.grads_input = tf.placeholder(dtype,shape=[None])
+        self.neg_grads_and_vars = [(-gv[0]/100.0,gv[1]) for gv in self.grads_and_vars]
+
+        # self.apply_grads = self.optimizer.apply_gradients(self.grads_input,var_list)
+        self.apply_neg_grads = self.optimizer.apply_gradients(self.neg_grads_and_vars)
         self.scipy_optimizer = ScipyOptimizerInterface(self.proximal_loss,options={'maxiter': 10})
-        self.train_op = tf.train.AdamOptimizer(self.learning_rate,beta1=.1,beta2=.1).minimize(self.proximal_loss)
+        # self.train_op = tf.train.AdamOptimizer(self.learning_rate,beta1=.1,beta2=.1).minimize(self.proximal_loss)
         #see if separating them does anything to learning
         self.surr_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(surr)
         self.kl_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.beta * kl)
@@ -175,7 +209,7 @@ class TRPOAgent(object):
         self.kl_running_avg = 0
         self.surr_running_avg = 0
         self.session.run(tf.initialize_all_variables())
-        self.weights = [tf.reduce_mean(v) for v in tf.trainable_variables() if v.name[:2]=='h0']
+        self.weights = [tf.reduce_mean(v) for v in tf.trainable_variables() if v.name[:8]=='policy/h0']
 
     def act(self, obs, *args):
         #filter the observations
@@ -241,7 +275,7 @@ class TRPOAgent(object):
             #     path["advant"] = path["returns"] - path["baseline"]
             compute_advantage(self.vf,paths,gamma=.995,lam=.97)
             # Updating policy.
-            action_dist_n = np.concatenate([path["action_dists"] for path in paths])
+            action_dist_r = np.concatenate([path["action_dists"] for path in paths])
             obs_n = np.concatenate([path["obs"] for path in paths])
             action_n = np.concatenate([path["actions"] for path in paths])
             baseline_n = np.concatenate([path["baseline"] for path in paths])
@@ -277,23 +311,64 @@ class TRPOAgent(object):
                     self.beta *= 10
                 elif self.kl_running_avg*self.beta > 10 * self.surr_running_avg:
                     self.beta *= .1
-            if i % 40 == 0 and i > 1:
-                self.learning_rate_value *= .1
+            # if i % 40 == 0 and i > 1:
+            #     self.learning_rate_value *= .1
             if self.train:
                 self.vf.fit(paths)
 
                 feed = {self.obs: obs_n,
                         self.action: action_n,
                         self.advant: advant_n,
-                        self.oldaction_dist: action_dist_n,
+                        self.oldaction_dist: action_dist_r,
                         self.learning_rate : self.learning_rate_value,
                         }
 
-                # _ = self.session.run(
-                #                 [self.train_op],
+                #conj grad style
+                thprev = self.gf()
+                def fisher_vector_product(p):
+                    feed[self.flat_tangent] = p
+                    return self.session.run(self.fvp, feed) + config.cg_damping * p
+
+                g = self.session.run(self.pg, feed_dict=feed)
+                print(np.mean(g))
+                stepdir = conjugate_gradient(fisher_vector_product, -g)
+                shs = .5 * stepdir.dot(fisher_vector_product(stepdir))
+                lm = np.sqrt(shs / config.max_kl)
+                print('lm',lm)
+                fullstep = stepdir / lm
+                neggdotstepdir = -g.dot(stepdir)
+                print('expected_improve',neggdotstepdir/lm)
+                def loss_update(th):
+                    self.sff(th)
+                    return self.session.run(self.losses[0], feed_dict=feed)
+                def loss_grads(grads):
+                    self.sffg(grads)
+                    return self.session.run(self.losses[0], feed_dict=feed)
+                print('surr',self.session.run(self.losses[0], feed_dict=feed))
+                theta = linesearch(loss_update, thprev, fullstep, neggdotstepdir / lm)
+                self.sff(theta)
+                kl_val = self.session.run(
+                                [self.losses[1]],
+                                feed_dict=feed)
+                print(kl_val)
+                if np.mean(kl_val) > .01:
+                    self.sff(thprev+fullstep/100.0)
+                # #sgd style
+                # _,kl_val = self.session.run(
+                #                 [self.train_op,self.losses[1]],
                 #                 feed_dict=feed)
-                self.scipy_optimizer.minimize(self.session,
-                        feed_dict=feed)
+                # print(kl_val)
+                # for __ in range(10):
+                #
+                #     _,kl_val = self.session.run(
+                #                     [self.train_op,self.losses[1]],
+                #                     feed_dict=feed)
+                #     print(kl_val)
+                #     if kl_val > 0.01 or kl_val == 0:
+                #         break
+
+                # self.scipy_optimizer.minimize(self.session,
+                #         feed_dict=feed)
 
                 ad = self.session.run(
                                 [self.action_dist_n],

@@ -128,7 +128,10 @@ class SetFromFlat(object):
     def __init__(self, session, var_list):
         self.session = session
         assigns = []
-        shapes = map(var_shape, var_list)
+        # shapes = map(var_shape, var_list)
+        shapes = []
+        for v in var_list:
+            shapes.append( var_shape(v) )
         total_size = sum(np.prod(shape) for shape in shapes)
         self.theta = theta = tf.placeholder(dtype, [total_size])
         start = 0
@@ -148,6 +151,38 @@ class SetFromFlat(object):
 
     def __call__(self, theta):
         self.session.run(self.op, feed_dict={self.theta: theta})
+
+class SetFromFlatGrads(object):
+
+    def __init__(self, session, optimizer,var_list):
+        self.session = session
+        self.optimizer = optimizer
+        assigns = []
+        shapes = []
+        for v in var_list:
+            shapes.append( var_shape(v) )
+        total_size = sum(np.prod(shape) for shape in shapes)
+        self.grads_input_sff = tf.placeholder(dtype, [total_size])
+        self.grads_var = tf.Variable(tf.zeros([total_size]))
+        self.grads_var.assign(self.grads_input_sff)
+        start = 0
+        assigns = []
+        grads_and_vars_set = []
+        for (shape, v) in zip(shapes, var_list):
+            size = np.prod(shape)
+            grads_and_vars_set.append(
+            (tf.reshape(
+                self.grads_var[
+                    start:start +
+                    size],
+                shape),v)
+            )
+
+            start += size
+        self.op = self.optimizer.apply_gradients(grads_and_vars_set)
+
+    def __call__(self, grads_input_sff):
+        self.session.run(self.op, feed_dict={self.grads_input_sff: grads_input_sff})
 
 
 class GetFlat(object):
@@ -173,13 +208,18 @@ def linesearch(f, x, fullstep, expected_improve_rate):
     accept_ratio = .1
     max_backtracks = 10
     fval = f(x)
+    print("fval before",fval)
     for (_n_backtracks, stepfrac) in enumerate(.5**np.arange(max_backtracks)):
         xnew = x + stepfrac * fullstep
+        print("xnew",np.mean(xnew))
         newfval = f(xnew)
         actual_improve = fval - newfval
+        print('actual improve',actual_improve,newfval)
         expected_improve = expected_improve_rate * stepfrac
         ratio = actual_improve / expected_improve
+        print("ratio",ratio)
         if ratio > accept_ratio and actual_improve > 0:
+            print("fval after",newfval)
             return xnew
     return x
 
