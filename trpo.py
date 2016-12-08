@@ -46,7 +46,7 @@ def policy_model(input_layer,hidden_layer_sizes=[64,64],task_size=False,output_s
         #fixed std dev
         with tf.variable_scope('out_std'):
             W = tf.Variable(tf.zeros([1,output_size]))
-            h3_std = tf.tile(W,tf.pack([tf.shape(h3)[0],1]))
+            h3_std = tf.tile(tf.exp(W),tf.pack([tf.shape(h3)[0],1]))
         h3 = tf.reshape(h3,[-1,output_size])
         h3_std = tf.reshape(h3_std,[-1,output_size])
         output = tf.concat(1,[h3,h3_std])
@@ -55,17 +55,17 @@ def policy_model(input_layer,hidden_layer_sizes=[64,64],task_size=False,output_s
 
 def loglikelihood(actions,action_dist,dims):
     mean_n = tf.reshape(action_dist[:,:dims],[tf.shape(action_dist)[0],dims])
-    std_n = tf.exp(tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims]))
+    std_n = (tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims]))
     # std_n = tf.reshape(action_dist[:,1,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
     return -0.5 * tf.reduce_sum(tf.square((actions-mean_n) / std_n),1) \
                 -0.5 * tf.log(2.0*np.pi)*dims - tf.reduce_sum(tf.log(std_n),1)
 
 def kl_divergence(action_dist_0,action_dist_1,dims):
     mean_0 = tf.reshape(action_dist_0[:,:dims],[tf.shape(action_dist_0)[0],dims])
-    std_0 = tf.exp(tf.reshape(action_dist_0[:,dims:],[tf.shape(action_dist_0)[0],dims]))
+    std_0 = (tf.reshape(action_dist_0[:,dims:],[tf.shape(action_dist_0)[0],dims]))
     # std_n = tf.reshape(action_dist[:,1,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
     mean_1 = tf.reshape(action_dist_1[:,dims:],[tf.shape(action_dist_0)[0],dims])
-    std_1 = tf.exp(tf.reshape(action_dist_1[:,dims:],[tf.shape(action_dist_0)[0],dims]))
+    std_1 = (tf.reshape(action_dist_1[:,dims:],[tf.shape(action_dist_0)[0],dims]))
     return (tf.reduce_sum(tf.log(std_1/std_0),1) + tf.reduce_sum((tf.square(std_0)+
         tf.square(mean_0 - mean_1)) / (2.0 * tf.square(std_1)),1) - 0.5*dims)
 
@@ -153,7 +153,7 @@ class TRPOAgent(object):
             self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, env.action_space.shape[0]*2], name="oldaction_dist")
             with self.session as sess:
                 action_dist_n = policy_model(self.obs,
-                                            hidden_layer_sizes=[60,60,30],
+                                            hidden_layer_sizes=[60,60],
                                             output_size=self.dimensions)
             self.action = action = tf.placeholder(dtype, shape=[None,env.action_space.shape[0]], name="action")
             self.action_dist_n = action_dist_n
@@ -161,10 +161,10 @@ class TRPOAgent(object):
             Nf = tf.cast(N, dtype)
             logp_n = loglikelihood(action,action_dist_n,self.dimensions)
             oldlogp_n = loglikelihood(action,oldaction_dist,self.dimensions)
-            surr = -tf.reduce_sum( tf.exp(logp_n - oldlogp_n) * advant) / Nf
+            surr = -tf.reduce_mean( tf.exp(logp_n - oldlogp_n) * advant)
             kl = tf.reduce_mean(kl_divergence(oldaction_dist,action_dist_n,self.dimensions))
             flipped_kl = tf.reduce_mean(kl_divergence(action_dist_n,oldaction_dist,self.dimensions))
-            ent = tf.reduce_mean(tf.reduce_sum(action_dist_n[:,self.dimensions:],1) + .5  *
+            ent = tf.reduce_mean(tf.reduce_sum(tf.log(action_dist_n[:,self.dimensions:]),1) + .5  *
             np.log(2*np.pi*np.e) * self.dimensions)
             # ent = tf.Variable(0)
 
@@ -174,6 +174,7 @@ class TRPOAgent(object):
         self.losses = [surr, kl, ent]
         self.pg = flatgrad(surr,var_list)
         grads = tf.gradients(tf.reduce_mean(kl_divergence(tf.stop_gradient(action_dist_n),action_dist_n,self.dimensions)),var_list)
+        # grads = tf.gradients(kl,var_list)
         self.flat_tangent = tf.placeholder(dtype,shape=[None])
         shapes = []
         for v in var_list:
@@ -189,8 +190,8 @@ class TRPOAgent(object):
         self.fvp = flatgrad(gvp, var_list)
         self.gf = GetFlat(self.session, var_list)
         self.sff = SetFromFlat(self.session, var_list)
-        self.proximal_loss = surr + self.beta * flipped_kl
-        self.learning_rate_value = 1
+        self.proximal_loss = surr + self.beta * kl
+        self.learning_rate_value = .01
         self.optimizer = tf.train.GradientDescentOptimizer(1)
         self.sffg = SetFromFlatGrads(self.session,self.optimizer,var_list)
 
@@ -203,7 +204,7 @@ class TRPOAgent(object):
         # self.apply_grads = self.optimizer.apply_gradients(self.grads_input,var_list)
         self.apply_neg_grads = self.optimizer.apply_gradients(self.neg_grads_and_vars)
         self.scipy_optimizer = ScipyOptimizerInterface(self.proximal_loss,options={'maxiter': 20})
-        self.train_op = tf.train.AdamOptimizer(.05,beta1=.1,beta2=.1).minimize(self.proximal_loss)
+        # self.train_op = tf.train.AdamOptimizer(.05,beta1=.1,beta2=.1).minimize(self.proximal_loss)
         #see if separating them does anything to learning
         self.surr_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(surr)
         self.kl_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.beta * kl)
@@ -232,7 +233,7 @@ class TRPOAgent(object):
         else:
             # action = np.random.randn(self.dimensions) * action_dist_n[0,1,:] + action_dist_n[0,0,:]
             # print(action_dist_n.shape)
-            action = np.random.randn(self.dimensions) * np.exp(action_dist_n[0,self.dimensions:]) + action_dist_n[0,:self.dimensions]
+            action = np.random.randn(self.dimensions) * action_dist_n[0,self.dimensions:] + action_dist_n[0,:self.dimensions]
             self.prev_action = np.expand_dims(np.copy(action),0)
         self.prev_obs = obs
         return action, action_dist_n, np.squeeze(obs_new)
@@ -325,7 +326,7 @@ class TRPOAgent(object):
                         self.learning_rate : self.learning_rate_value,
                         }
 
-                if i > 5:
+                if i > 10:
                     #conj grad style
                     thprev = self.gf()
                     def fisher_vector_product(p):
@@ -355,8 +356,8 @@ class TRPOAgent(object):
                                     feed_dict=feed)
                     print(kl_val)
                     if np.mean(kl_val) > .02:
-                        print('using old th')
-                        self.sff(thprev)
+                        print('---------------using old th')
+                        self.sff(thprev + fullstep/1000.0)
                 else:
                     #sgd style
                     _,kl_val = self.session.run(
