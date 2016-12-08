@@ -207,18 +207,19 @@ def slice_2d(x, inds0, inds1):
 def linesearch(f, x, fullstep, expected_improve_rate):
     accept_ratio = .1
     max_backtracks = 10
-    fval = f(x)
+    fval,_ = f(x)
     print("fval before",fval)
     for (_n_backtracks, stepfrac) in enumerate(.5**np.arange(max_backtracks)):
         xnew = x + stepfrac * fullstep
         print("xnew",np.mean(xnew))
-        newfval = f(xnew)
+        newfval,kl_val = f(xnew)
         actual_improve = fval - newfval
-        print('actual improve',actual_improve,newfval)
+        print('actual improve',actual_improve,newfval,kl_val)
         expected_improve = expected_improve_rate * stepfrac
         ratio = actual_improve / expected_improve
         print("ratio",ratio)
-        if ratio > accept_ratio and actual_improve > 0:
+        if ((ratio > accept_ratio and actual_improve > 0) or
+            (actual_improve > 0 and kl_val > .01)):
             print("fval after",newfval)
             return xnew
     return x

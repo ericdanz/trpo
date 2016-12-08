@@ -18,26 +18,27 @@ from external_optimizer import ScipyOptimizerInterface
 
 def policy_model(input_layer,hidden_layer_sizes=[64,64],task_size=False,output_size=3):
     net = input_layer
-    # for i,hidden_size in enumerate(hidden_layer_sizes):
-    #     with tf.variable_scope('h{}'.format(i)):
-    #         W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_size])*.1)
-    #         b = tf.Variable(tf.zeros([hidden_size]))
-    #         h = tf.matmul(net,W) + b
-    #         a = tf.nn.tanh(h)
-    #     net = a
+
     with tf.variable_scope('policy'):
-        with tf.variable_scope('h0'):
-            W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_layer_sizes[0]])*.1)
-            b = tf.Variable(tf.zeros([hidden_layer_sizes[0]]))
-            h = tf.matmul(net,W) + b
-            a = tf.nn.tanh(h)
-        net = a
-        with tf.variable_scope('h1'):
-            W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_layer_sizes[0]])*.1)
-            b = tf.Variable(tf.zeros([hidden_layer_sizes[0]]))
-            h = tf.matmul(net,W) + b
-            a = tf.nn.tanh(h)
-        net = a
+        for i,hidden_size in enumerate(hidden_layer_sizes):
+            with tf.variable_scope('h{}'.format(i)):
+                W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_size])*.1)
+                b = tf.Variable(tf.zeros([hidden_size]))
+                h = tf.matmul(net,W) + b
+                a = tf.nn.tanh(h)
+            net = a
+        # with tf.variable_scope('h0'):
+        #     W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_layer_sizes[0]])*.01)
+        #     b = tf.Variable(tf.zeros([hidden_layer_sizes[0]]))
+        #     h = tf.matmul(net,W) + b
+        #     a = tf.nn.tanh(h)
+        # net = a
+        # with tf.variable_scope('h1'):
+        #     W = tf.Variable(tf.truncated_normal([net.get_shape()[1].value,hidden_layer_sizes[0]])*.01)
+        #     b = tf.Variable(tf.zeros([hidden_layer_sizes[0]]))
+        #     h = tf.matmul(net,W) + b
+        #     a = tf.nn.tanh(h)
+        # net = a
         with tf.variable_scope('out_mean'):
             W = tf.Variable(tf.zeros([net.get_shape()[1].value,output_size]))
             b = tf.Variable(tf.zeros([output_size]))
@@ -105,7 +106,7 @@ class TRPOAgent(object):
         self.train = True
         self.prev_obs = np.zeros((1, env.observation_space.shape[0]))
         self.advant = advant = tf.placeholder(dtype, shape=[None], name="advant")
-        self.beta = 1
+        self.beta = 10
         self.learning_rate = tf.placeholder(dtype,shape=(),name="learning_rate")
         self.clip = 5
         self.eps = 1e-8
@@ -152,7 +153,7 @@ class TRPOAgent(object):
             self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, env.action_space.shape[0]*2], name="oldaction_dist")
             with self.session as sess:
                 action_dist_n = policy_model(self.obs,
-                                            hidden_layer_sizes=[60,60],
+                                            hidden_layer_sizes=[60,60,30],
                                             output_size=self.dimensions)
             self.action = action = tf.placeholder(dtype, shape=[None,env.action_space.shape[0]], name="action")
             self.action_dist_n = action_dist_n
@@ -162,6 +163,7 @@ class TRPOAgent(object):
             oldlogp_n = loglikelihood(action,oldaction_dist,self.dimensions)
             surr = -tf.reduce_sum( tf.exp(logp_n - oldlogp_n) * advant) / Nf
             kl = tf.reduce_mean(kl_divergence(oldaction_dist,action_dist_n,self.dimensions))
+            flipped_kl = tf.reduce_mean(kl_divergence(action_dist_n,oldaction_dist,self.dimensions))
             ent = tf.reduce_mean(tf.reduce_sum(action_dist_n[:,self.dimensions:],1) + .5  *
             np.log(2*np.pi*np.e) * self.dimensions)
             # ent = tf.Variable(0)
@@ -187,7 +189,7 @@ class TRPOAgent(object):
         self.fvp = flatgrad(gvp, var_list)
         self.gf = GetFlat(self.session, var_list)
         self.sff = SetFromFlat(self.session, var_list)
-        self.proximal_loss = surr + self.beta * kl
+        self.proximal_loss = surr + self.beta * flipped_kl
         self.learning_rate_value = 1
         self.optimizer = tf.train.GradientDescentOptimizer(1)
         self.sffg = SetFromFlatGrads(self.session,self.optimizer,var_list)
@@ -200,8 +202,8 @@ class TRPOAgent(object):
 
         # self.apply_grads = self.optimizer.apply_gradients(self.grads_input,var_list)
         self.apply_neg_grads = self.optimizer.apply_gradients(self.neg_grads_and_vars)
-        self.scipy_optimizer = ScipyOptimizerInterface(self.proximal_loss,options={'maxiter': 10})
-        # self.train_op = tf.train.AdamOptimizer(self.learning_rate,beta1=.1,beta2=.1).minimize(self.proximal_loss)
+        self.scipy_optimizer = ScipyOptimizerInterface(self.proximal_loss,options={'maxiter': 20})
+        self.train_op = tf.train.AdamOptimizer(.05,beta1=.1,beta2=.1).minimize(self.proximal_loss)
         #see if separating them does anything to learning
         self.surr_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(surr)
         self.kl_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(self.beta * kl)
@@ -209,11 +211,11 @@ class TRPOAgent(object):
         self.kl_running_avg = 0
         self.surr_running_avg = 0
         self.session.run(tf.initialize_all_variables())
-        self.weights = [tf.reduce_mean(v) for v in tf.trainable_variables() if v.name[:8]=='policy/h0']
+        self.weights = [tf.reduce_mean(v) for v in tf.trainable_variables() if v.name[:len('policy/h0')]=='policy/h0']
 
     def act(self, obs, *args):
         #filter the observations
-        # obs = self.obs_filter(obs)
+        obs = self.obs_filter(obs)
         obs = np.expand_dims(obs, 0)
         if self.prev_obs[0,0] == 0:
             self.prev_obs = obs
@@ -323,40 +325,43 @@ class TRPOAgent(object):
                         self.learning_rate : self.learning_rate_value,
                         }
 
-                #conj grad style
-                thprev = self.gf()
-                def fisher_vector_product(p):
-                    feed[self.flat_tangent] = p
-                    return self.session.run(self.fvp, feed) + config.cg_damping * p
+                if i > 5:
+                    #conj grad style
+                    thprev = self.gf()
+                    def fisher_vector_product(p):
+                        feed[self.flat_tangent] = p
+                        return self.session.run(self.fvp, feed) + config.cg_damping * p
 
-                g = self.session.run(self.pg, feed_dict=feed)
-                print(np.mean(g))
-                stepdir = conjugate_gradient(fisher_vector_product, -g)
-                shs = .5 * stepdir.dot(fisher_vector_product(stepdir))
-                lm = np.sqrt(shs / config.max_kl)
-                print('lm',lm)
-                fullstep = stepdir / lm
-                neggdotstepdir = -g.dot(stepdir)
-                print('expected_improve',neggdotstepdir/lm)
-                def loss_update(th):
-                    self.sff(th)
-                    return self.session.run(self.losses[0], feed_dict=feed)
-                def loss_grads(grads):
-                    self.sffg(grads)
-                    return self.session.run(self.losses[0], feed_dict=feed)
-                print('surr',self.session.run(self.losses[0], feed_dict=feed))
-                theta = linesearch(loss_update, thprev, fullstep, neggdotstepdir / lm)
-                self.sff(theta)
-                kl_val = self.session.run(
-                                [self.losses[1]],
-                                feed_dict=feed)
-                print(kl_val)
-                if np.mean(kl_val) > .01:
-                    self.sff(thprev+fullstep/100.0)
-                # #sgd style
-                # _,kl_val = self.session.run(
-                #                 [self.train_op,self.losses[1]],
-                #                 feed_dict=feed)
+                    g = self.session.run(self.pg, feed_dict=feed)
+                    print(np.mean(g))
+                    stepdir = conjugate_gradient(fisher_vector_product, -g)
+                    shs = .5 * stepdir.dot(fisher_vector_product(stepdir))
+                    lm = np.sqrt(shs / config.max_kl)
+                    print('lm',lm)
+                    fullstep = stepdir / lm
+                    neggdotstepdir = -g.dot(stepdir)
+                    print('expected_improve',neggdotstepdir/lm)
+                    def loss_update(th):
+                        self.sff(th)
+                        return self.session.run(self.losses[:2], feed_dict=feed)
+                    def loss_grads(grads):
+                        self.sffg(grads)
+                        return self.session.run(self.losses[0], feed_dict=feed)
+                    print('surr,kl',self.session.run(self.losses[:2], feed_dict=feed))
+                    theta = linesearch(loss_update, thprev, fullstep, neggdotstepdir / lm)
+                    self.sff(theta)
+                    kl_val = self.session.run(
+                                    [self.losses[1]],
+                                    feed_dict=feed)
+                    print(kl_val)
+                    if np.mean(kl_val) > .02:
+                        print('using old th')
+                        self.sff(thprev)
+                else:
+                    #sgd style
+                    _,kl_val = self.session.run(
+                                    [self.train_op,self.losses[1]],
+                                    feed_dict=feed)
                 # print(kl_val)
                 # for __ in range(10):
                 #
@@ -367,8 +372,8 @@ class TRPOAgent(object):
                 #     if kl_val > 0.01 or kl_val == 0:
                 #         break
 
-                # self.scipy_optimizer.minimize(self.session,
-                #         feed_dict=feed)
+                    # self.scipy_optimizer.minimize(self.session,
+                    #         feed_dict=feed)
 
                 ad = self.session.run(
                                 [self.action_dist_n],
