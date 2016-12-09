@@ -23,6 +23,7 @@ if __name__ == "__main__":
         task = sys.argv[1]
     else:
         task = "Reacher-v1"
+        # task = "CartPole-v1"
 
     env = envs.make(task)
     env.monitor.start(training_dir)
