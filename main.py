@@ -13,7 +13,7 @@ from space_conversion import SpaceConversionEnv
 import tempfile
 import sys
 from trpo import TRPOAgent
-
+# from ur5_env import UR5Env
 
 if __name__ == "__main__":
     training_dir = tempfile.mkdtemp()
@@ -22,14 +22,15 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         task = sys.argv[1]
     else:
-        task = "Reacher-v1"
-        # task = "CartPole-v1"
+        # task = "Reacher-v1"
+        task = "CartPole-v1"
 
-    env = envs.make(task)
-    env.monitor.start(training_dir)
-
+    # env = envs.make(task)
+    # env.monitor.start(training_dir)
+    env = UR5Env("ur5_learn_position","ur5_control.launch")
     agent = TRPOAgent(env)
     agent.learn()
-    env.monitor.close()
-    gym.upload(training_dir,
-               algorithm_id='trpo_proximal_tf')
+    env.close()
+    # env.monitor.close()
+    # gym.upload(training_dir,
+    #            algorithm_id='trpo_proximal_tf')

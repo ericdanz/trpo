@@ -14,7 +14,8 @@ import tempfile
 import sys
 import datetime
 import subprocess
-from external_optimizer import ScipyOptimizerInterface
+# from external_optimizer import ScipyOptimizerInterface
+from tensorflow.contrib.opt.python.training import external_optimizer
 
 def policy_model(input_layer,hidden_layer_sizes=[64,64],task_size=False,output_size=3):
     net = input_layer
@@ -46,10 +47,10 @@ def policy_model(input_layer,hidden_layer_sizes=[64,64],task_size=False,output_s
         #fixed std dev
         with tf.variable_scope('out_std'):
             W = tf.Variable(tf.zeros([1,output_size]))
-            h3_std = tf.tile(tf.exp(W),tf.pack([tf.shape(h3)[0],1]))
+            h3_std = tf.tile(tf.exp(W),tf.stack([tf.shape(h3)[0],1]))
         h3 = tf.reshape(h3,[-1,output_size])
         h3_std = tf.reshape(h3_std,[-1,output_size])
-        output = tf.concat(1,[h3,h3_std])
+        output = tf.concat(axis=1,values=[h3,h3_std])
 
     return output
 
@@ -57,8 +58,8 @@ def loglikelihood(actions,action_dist,dims):
     mean_n = tf.reshape(action_dist[:,:dims],[tf.shape(action_dist)[0],dims])
     std_n = (tf.reshape(action_dist[:,dims:],[tf.shape(action_dist)[0],dims]))
     # std_n = tf.reshape(action_dist[:,1,:],[tf.shape(action_dist)[0],tf.shape(action_dist)[2]])
-    return -0.5 * tf.reduce_sum(tf.square((actions-mean_n) / std_n),reduction_indices=-1) \
-                -0.5 * tf.log(2.0*np.pi)*dims - tf.reduce_sum(tf.log(std_n),reduction_indices=-1)
+    return -0.5 * tf.reduce_sum(tf.square((actions-mean_n) / std_n),axis=-1) \
+                -0.5 * tf.log(2.0*np.pi)*dims - tf.reduce_sum(tf.log(std_n),axis=-1)
 
 def kl_divergence(action_dist_0,action_dist_1,dims):
     #old, new
@@ -71,7 +72,7 @@ def kl_divergence(action_dist_0,action_dist_1,dims):
     denominator = 2 * tf.square(std_1) + 1e-8
 
     return tf.reduce_sum(
-        numerator / denominator + tf.log(std_1) - tf.log(std_0),reduction_indices=-1)
+        numerator / denominator + tf.log(std_1) - tf.log(std_0),axis=-1)
 
 def compute_advantage(vf, paths, gamma=.999, lam=.99):
     # Compute return, baseline, advantage
@@ -117,11 +118,14 @@ class TRPOAgent(object):
         self.count = None
         self.mean = None
         self.std = None
-        with subprocess.Popen(["git","rev-parse" ,"HEAD"], stdout=subprocess.PIPE) as proc:
-            GIT_COMMIT = str(proc.stdout.read())[-8:-3]
+        # with subprocess.Popen(["git","rev-parse" ,"HEAD"], stdout=subprocess.PIPE) as proc:
+        #     GIT_COMMIT = str(proc.stdout.read())[-8:-3]
+        # GIT_COMMIT  = subprocess.check_output(["git", "describe"]).strip()
+        GIT_COMMIT  = subprocess.check_output(["git","rev-parse" ,"HEAD"]).strip()[:6]
+        # print("GIT", GIT_COMMIT)
         now = datetime.datetime.now()
         identifying_string = "{}-{}-{}-rand{}:".format(now.day,now.month,now.year,str(time.time())[-3:]) + GIT_COMMIT
-        self.train_writer = tf.train.SummaryWriter('./train/'+identifying_string,
+        self.train_writer = tf.summary.FileWriter('./train/'+identifying_string,
                                       self.session.graph)
         if isinstance(env.action_space,Discrete):
             self.discrete = True
@@ -140,7 +144,7 @@ class TRPOAgent(object):
                                     fully_connected(32, activation_fn=tf.nn.tanh).
                                     fully_connected(32, activation_fn=tf.nn.tanh).
                                     softmax_classifier(env.action_space.n))
-            var_list = tf.get_collection(tf.GraphKeys.VARIABLES, scope='policy')
+            var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='policy')
             self.action_dist_n = action_dist_n
             N = tf.shape(obs)[0]
             p_n = slice_2d(action_dist_n, tf.range(0, N), action)
@@ -165,7 +169,7 @@ class TRPOAgent(object):
                                             hidden_layer_sizes=[30,30],
                                             output_size=self.dimensions)
             self.action = action = tf.placeholder(dtype, shape=[None,env.action_space.shape[0]], name="action")
-            var_list = tf.get_collection(tf.GraphKeys.VARIABLES, scope='policy')
+            var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='policy')
             self.action_dist_n = action_dist_n
             N = tf.shape(obs)[0]
             Nf = tf.cast(N, dtype)
@@ -213,7 +217,7 @@ class TRPOAgent(object):
 
         # self.apply_grads = self.optimizer.apply_gradients(self.grads_input,var_list)
         self.apply_neg_grads = self.optimizer.apply_gradients(self.neg_grads_and_vars)
-        self.scipy_optimizer = ScipyOptimizerInterface(self.proximal_loss,options={'maxiter': 20})
+        self.scipy_optimizer = external_optimizer.ScipyOptimizerInterface(self.proximal_loss,options={'maxiter': 20})
         self.train_op = tf.train.AdamOptimizer(.05,beta1=.1,beta2=.1).minimize(self.proximal_loss) #
         #see if separating them does anything to learning
         self.surr_train_op = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(surr)
@@ -221,7 +225,7 @@ class TRPOAgent(object):
         self.vf = VF(self.session)
         self.kl_running_avg = 0
         self.surr_running_avg = 0
-        self.session.run(tf.initialize_all_variables())
+        self.session.run(tf.global_variables_initializer())
         self.weights = [tf.reduce_mean(v) for v in tf.trainable_variables() if v.name[:len('policy/h0')]=='policy/h0']
 
     def act(self, obs, *args):
