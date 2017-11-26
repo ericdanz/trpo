@@ -32,6 +32,7 @@ def rollout(env, agent, max_pathlength, n_timesteps):
             res = env.step(action)
             ob = res[0]
             rewards.append(res[1])
+            # print(ob)
             if res[2]:
                 terminated = True
                 break
@@ -65,7 +66,7 @@ class VF(object):
         self.net = tf.reshape(self.net, (-1, ))
         l2 = (self.net - self.y) * (self.net - self.y)
         self.train = tf.train.AdamOptimizer().minimize(l2)
-        self.session.run(tf.initialize_all_variables())
+        self.session.run(tf.global_variables_initializer())
 
 
     def _features(self, path):
@@ -119,7 +120,7 @@ def numel(x):
 
 def flatgrad(loss, var_list):
     grads = tf.gradients(loss, var_list)
-    return tf.concat(0, [tf.reshape(grad, [numel(v)])
+    return tf.concat(axis=0, values=[tf.reshape(grad, [numel(v)])
                          for (v, grad) in zip(var_list, grads)])
 
 
@@ -189,7 +190,7 @@ class GetFlat(object):
 
     def __init__(self, session, var_list):
         self.session = session
-        self.op = tf.concat(0, [tf.reshape(v, [numel(v)]) for v in var_list])
+        self.op = tf.concat(axis=0, values=[tf.reshape(v, [numel(v)]) for v in var_list])
 
     def __call__(self):
         return self.op.eval(session=self.session)

@@ -312,8 +312,10 @@ class TRPOAgent(object):
                 [path["rewards"].sum() for path in paths])
 
             print("\n********** Iteration %i ************" % i)
-            if self.env.spec.reward_threshold and \
-                episoderewards.mean() > 1.1 * self.env.spec.reward_threshold:
+            # if self.env.spec.reward_threshold and \
+            #     episoderewards.mean() > 1.1 * self.env.spec.reward_threshold:
+            #     self.train = False
+            if episoderewards.mean() > 0.0:
                 self.train = False
             elif i > 1000:
                 self.train = False

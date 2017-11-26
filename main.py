@@ -13,7 +13,7 @@ from space_conversion import SpaceConversionEnv
 import tempfile
 import sys
 from trpo import TRPOAgent
-# from ur5_env import UR5Env
+from ur5_env import UR5Env
 
 if __name__ == "__main__":
     training_dir = tempfile.mkdtemp()
