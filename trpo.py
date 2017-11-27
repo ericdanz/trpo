@@ -124,8 +124,8 @@ class TRPOAgent(object):
         GIT_COMMIT  = subprocess.check_output(["git","rev-parse" ,"HEAD"]).strip()[:6]
         # print("GIT", GIT_COMMIT)
         now = datetime.datetime.now()
-        identifying_string = "{}-{}-{}-rand{}:".format(now.day,now.month,now.year,str(time.time())[-3:]) + GIT_COMMIT
-        self.train_writer = tf.summary.FileWriter('./train/'+identifying_string,
+        self.identifying_string = "{}-{}-{}-rand{}:".format(now.day,now.month,now.year,str(time.time())[-3:]) + GIT_COMMIT
+        self.train_writer = tf.summary.FileWriter('./train/'+self.identifying_string,
                                       self.session.graph)
         if isinstance(env.action_space,Discrete):
             self.discrete = True
@@ -166,7 +166,7 @@ class TRPOAgent(object):
             self.oldaction_dist = oldaction_dist = tf.placeholder(dtype, shape=[None, env.action_space.shape[0]*2], name="oldaction_dist")
             with self.session as sess:
                 action_dist_n = policy_model(self.obs,
-                                            hidden_layer_sizes=[30,30],
+                                            hidden_layer_sizes=[30,30,15],
                                             output_size=self.dimensions)
             self.action = action = tf.placeholder(dtype, shape=[None,env.action_space.shape[0]], name="action")
             var_list = tf.get_collection(tf.GraphKeys.GLOBAL_VARIABLES, scope='policy')
@@ -226,6 +226,7 @@ class TRPOAgent(object):
         self.kl_running_avg = 0
         self.surr_running_avg = 0
         self.session.run(tf.global_variables_initializer())
+        self.saver = tf.train.Saver()
         self.weights = [tf.reduce_mean(v) for v in tf.trainable_variables() if v.name[:len('policy/h0')]=='policy/h0']
 
     def act(self, obs, *args):
@@ -446,7 +447,7 @@ class TRPOAgent(object):
 
                 lr_summ = tf.Summary(value=[tf.Summary.Value(tag="lr", simple_value=self.learning_rate_value)])
                 self.train_writer.add_summary(lr_summ, i)
-
+                self.saver.save(self.session,"train/trpo-model-{}.ckpt".format(self.identifying_string))
                 for k, v in stats.items():
                     print(k + ": " + " " * (40 - len(k)) + str(v))
                 # if l_list[2] != l_list[2]:
