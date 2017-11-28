@@ -317,7 +317,7 @@ class TRPOAgent(object):
             # if self.env.spec.reward_threshold and \
             #     episoderewards.mean() > 1.1 * self.env.spec.reward_threshold:
             #     self.train = False
-            if episoderewards.mean() > 0.0:
+            if episoderewards.mean() > -.1:
                 self.train = False
             elif i > 1000:
                 self.train = False
@@ -344,7 +344,7 @@ class TRPOAgent(object):
                         self.learning_rate : self.learning_rate_value,
                         }
 
-                if i > 1000:
+                if i < 1000:
                     #conj grad style
                     thprev = self.gf()
                     def fisher_vector_product(p):
@@ -378,10 +378,10 @@ class TRPOAgent(object):
                         self.sff(thprev + fullstep/1000.0)
                 else:
                     #sgd style
-                    # _,kl_val = self.session.run(
-                    #                 [self.train_op,self.losses[1]],
-                    #                 feed_dict=feed)
-                # print(kl_val)
+                #     _,kl_val = self.session.run(
+                #                     [self.train_op,self.losses[1]],
+                #                     feed_dict=feed)
+                # print("kl_val",kl_val)
                 # for __ in range(10):
                 #
                 #     _,kl_val = self.session.run(
@@ -390,7 +390,8 @@ class TRPOAgent(object):
                 #     print(kl_val)
                 #     if kl_val > 0.01 or kl_val == 0:
                 #         break
-
+                #
+                    print('scipy proximal loss')
                     self.scipy_optimizer.minimize(self.session,
                             feed_dict=feed)
 

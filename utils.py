@@ -3,7 +3,7 @@ import tensorflow as tf
 import random
 import scipy.signal
 import prettytensor as pt
-
+import time
 seed = 1
 random.seed(seed)
 np.random.seed(seed)
@@ -45,6 +45,7 @@ def rollout(env, agent, max_pathlength, n_timesteps):
         agent.prev_action *= 0.0
         agent.prev_obs *= 0.0
         timesteps_sofar += len(path["rewards"])
+        time.sleep(.01)
     return paths
 
 
