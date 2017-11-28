@@ -272,6 +272,21 @@ class TRPOAgent(object):
         obs = obs / (self.std+self.eps)
         obs = np.clip(obs,-self.clip,self.clip)
         return obs
+    
+    def load_model(self,model_path):
+        self.saver.restore(self.session, model_path)
+
+    def play_slow(self):
+        ob = self.env.reset()
+        agent.prev_action *= 0.0
+        agent.prev_obs *= 0.0
+        for i in xrange(250):
+            time.sleep(.1)
+            action, action_dist, ob = agent.act(ob)
+            res = env.step(action)
+            ob = res[0]
+            print('action',action)
+            print('reward',res[1])
 
     def learn(self):
         config = self.config
