@@ -118,6 +118,7 @@ class TRPOAgent(object):
         self.count = None
         self.mean = None
         self.std = None
+        self.save_count = 0
         # with subprocess.Popen(["git","rev-parse" ,"HEAD"], stdout=subprocess.PIPE) as proc:
         #     GIT_COMMIT = str(proc.stdout.read())[-8:-3]
         # GIT_COMMIT  = subprocess.check_output(["git", "describe"]).strip()
@@ -447,7 +448,8 @@ class TRPOAgent(object):
 
                 lr_summ = tf.Summary(value=[tf.Summary.Value(tag="lr", simple_value=self.learning_rate_value)])
                 self.train_writer.add_summary(lr_summ, i)
-                self.saver.save(self.session,"train/trpo-model-{}.ckpt".format(self.identifying_string))
+                self.saver.save(self.session,"train/trpo-model-{}-{}.ckpt".format(self.identifying_string,self.save_count))
+                self.save_count += 1
                 for k, v in stats.items():
                     print(k + ": " + " " * (40 - len(k)) + str(v))
                 # if l_list[2] != l_list[2]:
